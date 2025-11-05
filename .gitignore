@@ -48,3 +48,8 @@ outputs/
 /share
 /include
 pyvenv.cfg
+
+
+# Modules via pip (use pyproject.toml as the source of truth)
+requirements*.txt
+constraints*.txt

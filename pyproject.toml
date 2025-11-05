@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "parrot"
+version = "0.1.0"
+description = "UI testing with visual inspection AI."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-3.0-only"
+authors = [{ name = "Ryan Theodore The" }]
+dependencies = [
+  "selenium>=4.15.0",
+  "pyautogui>=0.9.54",
+  "pyobjc>=10.0; sys_platform == 'darwin'",
+  "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
+  "webdriver-manager>=4.0.0",
+]
+
+[project.scripts]
+parrot = "parrot.cli:run"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["parrot*"]
+
+[tool.setuptools.package-dir]
+"" = "src"
