@@ -1,0 +1,50 @@
+# Python specific
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+.Python/
+build/
+dist/
+*.egg-info/
+.env
+venv/
+env/
+
+# IDE and editor specific
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Data and models
+data/
+models/
+*.csv
+*.tsv
+*.xlsx
+*.pkl
+*.joblib
+*.h5
+*.tf
+*.onnx
+*.pth
+*.pt
+
+# Jupyter Notebook specific
+.ipynb_checkpoints/
+
+# Logs
+logs/
+*.log
+
+# Results and outputs
+results/
+outputs/
+
+/bin
+/lib
+/share
+/include
+pyvenv.cfg
