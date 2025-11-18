@@ -3,7 +3,7 @@ import sys
 import time
 
 from .screen.web_screen import WebScreen
-from .window_detector import WindowDetector
+from .screen.window_detector import WindowDetector
 from .interaction import InteractionHandler
 from .screen_capture import capture_region
 from .detector import UIDetector

@@ -1,4 +1,4 @@
-from ..window_detector import WindowDetector
+from .window_detector import WindowDetector
 from abc import ABC, abstractmethod
 
 
