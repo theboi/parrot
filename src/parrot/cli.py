@@ -25,7 +25,9 @@ def run():
     try:
         screen = WebScreen(args.url, args.headless, args.window_size)
         print(screen.get_bounds())
-         
+        screen.click((50,300))
+        time.sleep(10)
+
         # Wait (poll) for Chrome window to appear with non-zero size
         # print("📐 Detecting Chrome window bounds...")
         # bounds = None

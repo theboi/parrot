@@ -13,3 +13,7 @@ class WebScreen(Screen):
     @property
     def pid(self):
         return self.controller.pid
+
+    def close(self):
+        """Close the Chrome browser."""
+        self.controller.cleanup()
