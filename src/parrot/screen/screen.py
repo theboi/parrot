@@ -1,13 +1,21 @@
 from .window_detector import WindowDetector
 from ..interaction import InteractionHandler
 from abc import ABC, abstractmethod
-from typing import Callable, Union
+from typing import Callable, Union, Generator
+import threading
+import time
+import mss
+import numpy as np
+from PIL import Image
 
 
 class Screen(ABC):
     def __init__(self):
         self.detector = WindowDetector()
         self.interaction = InteractionHandler()
+        self._recording = False
+        self._record_thread = None
+        self._video_writer = None
 
     def get_bounds(self) -> dict:
         """Get the first window's bounds for this screen's PID.
@@ -126,7 +134,133 @@ class Screen(ABC):
 
     def close(self):
         """Close/cleanup the screen. Override in subclasses as needed."""
-        pass
+        self.stop_recording()
+
+    def capture(self) -> Image.Image:
+        """Capture a single frame of the window.
+        
+        Returns:
+            PIL.Image in RGB format, or None if bounds unavailable.
+        """
+        bounds = self.get_bounds()
+        if not bounds:
+            return None
+        
+        monitor = {
+            "left": int(bounds["x"]),
+            "top": int(bounds["y"]),
+            "width": int(bounds["width"]),
+            "height": int(bounds["height"]),
+        }
+        with mss.mss() as sct:
+            shot = sct.grab(monitor)
+            # mss returns BGRA; convert to RGB
+            img = np.array(shot)[:, :, :3][:, :, ::-1]
+            return Image.fromarray(img)
+
+    def frames(self, fps: float = 30) -> Generator[Image.Image, None, None]:
+        """Generator that yields frames at the specified FPS.
+        
+        Args:
+            fps: Target frames per second (default 30)
+            
+        Yields:
+            PIL.Image frames in RGB format
+        """
+        interval = 1.0 / fps
+        with mss.mss() as sct:
+            while True:
+                start = time.time()
+                
+                bounds = self.get_bounds()
+                if not bounds:
+                    break
+                
+                monitor = {
+                    "left": int(bounds["x"]),
+                    "top": int(bounds["y"]),
+                    "width": int(bounds["width"]),
+                    "height": int(bounds["height"]),
+                }
+                shot = sct.grab(monitor)
+                img = np.array(shot)[:, :, :3][:, :, ::-1]
+                
+                yield Image.fromarray(img)
+                
+                # Maintain target FPS
+                elapsed = time.time() - start
+                if elapsed < interval:
+                    time.sleep(interval - elapsed)
+
+    def start_recording(self, output_path: str, fps: float = 30, codec: str = 'mp4v'):
+        """Start recording the window to a video file.
+        
+        Args:
+            output_path: Path to output video file (e.g., 'output.mp4')
+            fps: Frames per second (default 30)
+            codec: FourCC codec code (default 'mp4v' for .mp4)
+        """
+        if self._recording:
+            raise RuntimeError("Already recording")
+        
+        import cv2
+        
+        bounds = self.get_bounds()
+        if not bounds:
+            raise RuntimeError("Could not get window bounds")
+        
+        width = int(bounds["width"])
+        height = int(bounds["height"])
+        
+        fourcc = cv2.VideoWriter_fourcc(*codec)
+        self._video_writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        self._recording = True
+        
+        def record_loop():
+            interval = 1.0 / fps
+            with mss.mss() as sct:
+                while self._recording:
+                    start = time.time()
+                    
+                    bounds = self.get_bounds()
+                    if not bounds:
+                        break
+                    
+                    monitor = {
+                        "left": int(bounds["x"]),
+                        "top": int(bounds["y"]),
+                        "width": int(bounds["width"]),
+                        "height": int(bounds["height"]),
+                    }
+                    shot = sct.grab(monitor)
+                    # mss returns BGRA, OpenCV expects BGR
+                    frame = np.array(shot)[:, :, :3]
+                    self._video_writer.write(frame)
+                    
+                    elapsed = time.time() - start
+                    if elapsed < interval:
+                        time.sleep(interval - elapsed)
+            
+            self._video_writer.release()
+            self._video_writer = None
+        
+        self._record_thread = threading.Thread(target=record_loop, daemon=True)
+        self._record_thread.start()
+
+    def stop_recording(self):
+        """Stop the current recording."""
+        if not self._recording:
+            return
+        
+        self._recording = False
+        if self._record_thread:
+            self._record_thread.join(timeout=2.0)
+            self._record_thread = None
+
+    @property
+    def is_recording(self) -> bool:
+        """Check if currently recording."""
+        return self._recording
 
     @property
     @abstractmethod
