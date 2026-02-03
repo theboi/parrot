@@ -1,12 +1,14 @@
 from .window_detector import WindowDetector
 from ..interaction import InteractionHandler
+from ..detector import UIDetector
 from abc import ABC, abstractmethod
-from typing import Callable, Union, Generator
+from typing import Callable, Union, Generator, List
 import threading
 import time
 import mss
 import numpy as np
 from PIL import Image
+import cv2
 
 
 class Screen(ABC):
@@ -16,6 +18,7 @@ class Screen(ABC):
         self._recording = False
         self._record_thread = None
         self._video_writer = None
+        self._ui_detector = None  # Lazy-loaded
 
     def get_bounds(self) -> dict:
         """Get the first window's bounds for this screen's PID.
@@ -261,6 +264,193 @@ class Screen(ABC):
     def is_recording(self) -> bool:
         """Check if currently recording."""
         return self._recording
+
+    def _get_ui_detector(self) -> UIDetector:
+        """Lazy-load the UI detector (model loading is expensive)."""
+        if self._ui_detector is None:
+            self._ui_detector = UIDetector()
+        return self._ui_detector
+
+    def detect_ui(self, labels: List[str] = None, score_thresh: float = 0.3) -> List[dict]:
+        """Detect UI elements in the current window.
+        
+        Args:
+            labels: List of UI element labels to detect. 
+                    Default: ['button', 'input', 'checkbox', 'link', 'dropdown']
+            score_thresh: Minimum confidence score (0-1)
+            
+        Returns:
+            List of detections, each with keys: label, score, bbox=(x1,y1,x2,y2)
+        """
+        if labels is None:
+            labels = ['button', 'input', 'checkbox', 'link', 'dropdown']
+        
+        frame = self.capture()
+        if frame is None:
+            return []
+        
+        detector = self._get_ui_detector()
+        return detector.detect(frame, labels, score_thresh)
+
+    def frames_with_detection(
+        self,
+        labels: List[str] = None,
+        fps: float = 10,
+        score_thresh: float = 0.3
+    ) -> Generator[tuple[Image.Image, List[dict]], None, None]:
+        """Generator that yields frames with UI detection results.
+        
+        Args:
+            labels: UI element labels to detect
+            fps: Target frames per second (default 10, lower due to model inference)
+            score_thresh: Minimum confidence score
+            
+        Yields:
+            Tuple of (PIL.Image frame, list of detections)
+        """
+        if labels is None:
+            labels = ['button', 'input', 'checkbox', 'link', 'dropdown']
+        
+        detector = self._get_ui_detector()
+        interval = 1.0 / fps
+        
+        with mss.mss() as sct:
+            while True:
+                start = time.time()
+                
+                bounds = self.get_bounds()
+                if not bounds:
+                    break
+                
+                monitor = {
+                    "left": int(bounds["x"]),
+                    "top": int(bounds["y"]),
+                    "width": int(bounds["width"]),
+                    "height": int(bounds["height"]),
+                }
+                shot = sct.grab(monitor)
+                img = np.array(shot)[:, :, :3][:, :, ::-1]
+                frame = Image.fromarray(img)
+                
+                # Run detection
+                detections = detector.detect(frame, labels, score_thresh)
+                
+                yield frame, detections
+                
+                # Maintain target FPS
+                elapsed = time.time() - start
+                if elapsed < interval:
+                    time.sleep(interval - elapsed)
+
+    def record_with_detection(
+        self,
+        output_path: str,
+        labels: List[str] = None,
+        fps: float = 10,
+        score_thresh: float = 0.3,
+        codec: str = 'mp4v'
+    ):
+        """Start recording with real-time UI detection overlays.
+        
+        Captures frames, runs OWL-ViT detection, draws bounding boxes,
+        and writes to video file.
+        
+        Args:
+            output_path: Path to output video file (e.g., 'output.mp4')
+            labels: UI element labels to detect
+            fps: Target frames per second (default 10, lower due to model inference)
+            score_thresh: Minimum confidence score
+            codec: FourCC codec code (default 'mp4v' for .mp4)
+        """
+        if self._recording:
+            raise RuntimeError("Already recording")
+        
+        if labels is None:
+            labels = ['button', 'input', 'checkbox', 'link', 'dropdown']
+        
+        bounds = self.get_bounds()
+        if not bounds:
+            raise RuntimeError("Could not get window bounds")
+        
+        width = int(bounds["width"])
+        height = int(bounds["height"])
+        
+        fourcc = cv2.VideoWriter_fourcc(*codec)
+        self._video_writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        self._recording = True
+        
+        # Pre-load the detector in main thread to avoid issues
+        detector = self._get_ui_detector()
+        
+        def record_loop():
+            interval = 1.0 / fps
+            with mss.mss() as sct:
+                while self._recording:
+                    start = time.time()
+                    
+                    bounds = self.get_bounds()
+                    if not bounds:
+                        break
+                    
+                    monitor = {
+                        "left": int(bounds["x"]),
+                        "top": int(bounds["y"]),
+                        "width": int(bounds["width"]),
+                        "height": int(bounds["height"]),
+                    }
+                    shot = sct.grab(monitor)
+                    img = np.array(shot)[:, :, :3][:, :, ::-1]
+                    frame = Image.fromarray(img)
+                    
+                    # Run detection and draw boxes
+                    detections = detector.detect(frame, labels, score_thresh)
+                    annotated = UIDetector.draw_detections(frame, detections)
+                    
+                    self._video_writer.write(annotated)
+                    
+                    elapsed = time.time() - start
+                    if elapsed < interval:
+                        time.sleep(interval - elapsed)
+            
+            self._video_writer.release()
+            self._video_writer = None
+        
+        self._record_thread = threading.Thread(target=record_loop, daemon=True)
+        self._record_thread.start()
+
+    def capture_with_detection(
+        self,
+        labels: List[str] = None,
+        score_thresh: float = 0.3,
+        draw_boxes: bool = True
+    ) -> tuple[Image.Image, List[dict]]:
+        """Capture a single frame with UI detection.
+        
+        Args:
+            labels: UI element labels to detect
+            score_thresh: Minimum confidence score
+            draw_boxes: If True, return image with bounding boxes drawn
+            
+        Returns:
+            Tuple of (PIL.Image, list of detections)
+        """
+        if labels is None:
+            labels = ['button', 'input', 'checkbox', 'link', 'dropdown']
+        
+        frame = self.capture()
+        if frame is None:
+            return None, []
+        
+        detector = self._get_ui_detector()
+        detections = detector.detect(frame, labels, score_thresh)
+        
+        if draw_boxes and detections:
+            annotated_bgr = UIDetector.draw_detections(frame, detections)
+            # Convert BGR back to RGB PIL Image
+            annotated_rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
+            frame = Image.fromarray(annotated_rgb)
+        
+        return frame, detections
 
     @property
     @abstractmethod
